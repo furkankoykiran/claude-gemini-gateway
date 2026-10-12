@@ -15,7 +15,8 @@ if(process.argv.includes('--help')) {console.error('--agent --input-format --out
 if(process.argv.includes('models')){console.log('fixture-model Fixture model');process.exit(0)}
 if(mode==='unauthenticated')process.exit(1);
 const conversation=crypto.randomUUID();
-console.log(JSON.stringify({event:'init',conversation_id:conversation,init:{model:'fixture-model'}}));
+const modelIndex=process.argv.indexOf('--model');const selectedModel=modelIndex<0?'fixture-model':process.argv[modelIndex+1];
+console.log(JSON.stringify({event:'init',conversation_id:conversation,init:{model:selectedModel}}));
 for await (const line of console){
  const req=JSON.parse(line);const hooks=JSON.parse(await readFile('.agents/hooks.json','utf8'));
  const command=hooks['gateway-native-deny'].PreInvocation[0].command;
@@ -76,4 +77,17 @@ test("explicit native request models are honored; only frontend aliases delegate
   expect(resolveAgyModel("claude-frontend-alias", {})).toBeUndefined();
   expect(resolveAgyModel("catalog-selected-model", { AGY_GATEWAY_MODEL: "configured-model" })).toBe("configured-model");
   expect(() => resolveAgyModel("<placeholder>", {})).toThrow();
+});
+
+test("the HTTP adapter forwards a catalog model selected in the request when no model override is configured", async () => {
+  const nativeEnv: Record<string, string | undefined> = env();
+  delete nativeEnv.AGY_GATEWAY_MODEL;
+  const server = createGatewayServer({ port: 0, env: nativeEnv });
+  try {
+    const response = await fetch(`${server.url}v1/messages`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "catalog-choice", messages: [{ role: "user", content: "NEW_MODEL_TURN" }] }) });
+    const body: any = await response.json();
+    expect(response.status).toBe(200);
+    expect(body.model).toBe("catalog-choice");
+    expect(body.content[0].text).toBe("NEW_MODEL_TURN");
+  } finally { server.stop(true); }
 });
