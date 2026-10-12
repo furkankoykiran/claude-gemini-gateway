@@ -8,15 +8,16 @@ import type {
 } from "./types.ts";
 
 export function resolveGeminiModel(model: string, env = process.env): string {
-  if (env["GEMINI_MODEL"]) return env["GEMINI_MODEL"];
-  if (model.startsWith("gemini-")) return model;
-  if (model.includes("flash")) return "gemini-3.8-flash";
-  if (model.includes("pro")) return "gemini-2.5-pro";
-  return "gemini-3.8-flash";
+  const selected = env["GEMINI_GATEWAY_MODEL"] || env["GEMINI_MODEL"] || model;
+  if (!selected || !/^[A-Za-z0-9._-]+$/.test(selected) || selected.startsWith("claude-")) {
+    throw new Error("Select a Google model ID using GEMINI_GATEWAY_MODEL or the request model; Claude aliases are not mapped.");
+  }
+  return selected;
 }
 
 export function translateAnthropicToGemini(
-  request: AnthropicMessagesRequest
+  request: AnthropicMessagesRequest,
+  issuedParts: Map<string, any> = new Map(),
 ): GeminiGenerateContentRequest {
   let systemText = "";
   if (typeof request.system === "string") {
@@ -50,14 +51,12 @@ export function translateAnthropicToGemini(
           }
         } else if (block.type === "tool_use") {
           toolNameById.set(block.id, block.name);
-          parts.push({
-            functionCall: {
-              name: block.name,
-              args: block.input ?? {},
-            },
+          parts.push(issuedParts.get(block.id) ?? {
+            functionCall: { name: block.name, args: block.input },
           });
         } else if (block.type === "tool_result") {
-          const fnName = toolNameById.get(block.tool_use_id) || "tool";
+          const fnName = toolNameById.get(block.tool_use_id);
+          if (!fnName) throw new Error("Tool result has no matching assistant tool use.");
           const resContent =
             typeof block.content === "string"
               ? block.content
@@ -70,6 +69,7 @@ export function translateAnthropicToGemini(
               name: fnName,
               response: {
                 content: resContent,
+                ...(block.is_error ? { is_error: true } : {}),
               },
             },
           });
@@ -77,9 +77,7 @@ export function translateAnthropicToGemini(
       }
     }
 
-    if (parts.length === 0) {
-      parts.push({ text: " " });
-    }
+    if (parts.length === 0) continue;
 
     // Merge consecutive messages with the same role
     const lastContent = contents[contents.length - 1];
@@ -93,19 +91,11 @@ export function translateAnthropicToGemini(
     }
   }
 
-  // Ensure first turn is user if contents exist
-  if (contents.length > 0 && contents[0].role !== "user") {
-    contents.unshift({
-      role: "user",
-      parts: [{ text: "Hello" }],
-    });
-  }
-
   const result: GeminiGenerateContentRequest = {
     contents,
     generationConfig: {
-      maxOutputTokens: request.max_tokens ?? 8192,
-      temperature: request.temperature ?? 0.7,
+      ...(request.max_tokens !== undefined ? { maxOutputTokens: request.max_tokens } : {}),
+      ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
     },
   };
 
@@ -138,6 +128,9 @@ export function translateGeminiToAnthropic(
   const parts = candidate?.content?.parts ?? [];
   const contentBlocks: AnthropicContentBlock[] = [];
   let hasFunctionCall = false;
+  if (!candidate || !["STOP", "MAX_TOKENS"].includes(candidate.finishReason)) {
+    throw new Error("Google response has no successful terminal candidate.");
+  }
 
   for (const part of parts) {
     if (part.text !== undefined) {
@@ -157,10 +150,7 @@ export function translateGeminiToAnthropic(
   }
 
   if (contentBlocks.length === 0) {
-    contentBlocks.push({
-      type: "text",
-      text: "",
-    });
+    throw new Error("Google returned no supported content.");
   }
 
   const stopReason = hasFunctionCall

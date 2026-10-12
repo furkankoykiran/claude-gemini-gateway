@@ -29,26 +29,25 @@ export function resolveGoogleCredentials(env = process.env): GoogleCredentials {
   }
 
   const vertexProject =
-    env["GOOGLE_APPLICATION_CREDENTIALS"] ||
     env["ANTHROPIC_VERTEX_PROJECT_ID"] ||
     env["VERTEX_PROJECT_ID"] ||
     env["GOOGLE_CLOUD_PROJECT"];
 
-  if (vertexProject && !vertexProject.startsWith("<") && vertexProject.trim().length > 0) {
+  if (vertexProject && !vertexProject.startsWith("<") && vertexProject.trim().length > 0 && env["GOOGLE_OAUTH_TOKEN"]?.trim()) {
     return {
       kind: "vertex",
-      project: env["ANTHROPIC_VERTEX_PROJECT_ID"] || env["VERTEX_PROJECT_ID"] || env["GOOGLE_CLOUD_PROJECT"] || "default",
+      project: env["ANTHROPIC_VERTEX_PROJECT_ID"] || env["VERTEX_PROJECT_ID"] || env["GOOGLE_CLOUD_PROJECT"],
       location: env["CLOUD_ML_REGION"] || env["VERTEX_LOCATION"] || "us-central1",
     };
   }
 
   if (detectConsumerOAuth(env)) {
     throw new Error(
-      "Claude Code inference requires officially supported Gemini API or Vertex credentials. Personal Antigravity consumer OAuth cannot be reused, copied, or proxied into Claude Code. Use native 'agy' CLI instead: agy -p \"your prompt\" --model gemini-3.8-flash --effort medium"
+      "Claude Code inference requires officially supported Gemini API or Vertex credentials. Personal Antigravity consumer OAuth cannot be reused, copied, or proxied into Claude Code. Use native 'agy' CLI instead with your configured model"
     );
   }
 
   throw new Error(
-    "No supported Google credentials found. Please set GEMINI_API_KEY in your environment or configure Vertex AI credentials. Personal Antigravity consumer OAuth is rejected in favor of native agy."
+    "No supported Google credentials found. Please set GEMINI_API_KEY in your environment or configure a Vertex project and GOOGLE_OAUTH_TOKEN (an official Google Cloud access token). An ADC file path alone is not an access token. Personal Antigravity consumer OAuth is rejected in favor of native agy."
   );
 }

@@ -1,43 +1,56 @@
 # claude-gemini-gateway
 
-Policy-safe Anthropic Messages to Google Gemini / Vertex AI gateway for Claude Code.
+Anthropic Messages-compatible Gemini inference adapter for Claude Code. Part of the gateway family with [claude-codex-gateway](https://github.com/furkankoykiran/claude-codex-gateway).
 
-## Overview
+## Status and ownership
 
-`claude-gemini-gateway` runs as a lightweight local adapter that exposes an Anthropic Messages-compatible (`/v1/messages` and `/v1/models`) loopback HTTP endpoint. It translates requests and streaming Server-Sent Events (SSE) into Google Gemini Developer API or Vertex AI invocations.
+Experimental protocol subset. Claude Code owns MCP, hooks, permissions and tool execution; the provider supplies inference. Health, catalogs and fixture tests do not prove live access or broad parity. See [the contract](docs/contract.md) and [verification](docs/verification.md) for tested behavior and limitations.
 
-## Security & Credential Boundary
+## Architecture
 
-- **Supported Credentials Only:** Supports official Google AI Studio (`GEMINI_API_KEY`) or Vertex AI credentials (`GOOGLE_APPLICATION_CREDENTIALS` / `ANTHROPIC_VERTEX_PROJECT_ID`).
-- **Policy Safe:** Strictly rejects personal Antigravity consumer OAuth tokens. Consumer OAuth is never read, copied, refreshed, or proxied into Claude Code. When only consumer OAuth is detected, the gateway fails closed and directs users to native `agy` CLI usage.
-- **Fail-Closed:** Missing or invalid credentials return structured 401/403 responses without fallback.
+Claude Code -> local Anthropic Messages adapter -> Google Developer API or Vertex HTTP. Tool results return through Claude Code and are correlated to the exact pending origin. See [architecture decisions](docs/architecture.md).
 
-## Quick Start
+## Development and setup
 
-```bash
-# Start gateway
-bin/gateway.sh start
-
-# Status
-bin/gateway.sh status
-
-# Stop
-bin/gateway.sh stop
-```
-
-## Running with Bun
+Requires Bun 1.3.8 or newer. Set an official Google AI Studio API key (`GEMINI_API_KEY`), or a Vertex project and official Google Cloud access token (`GOOGLE_OAUTH_TOKEN`). ADC files alone and personal Antigravity OAuth are unsupported and fail closed.
 
 ```bash
+bun install --frozen-lockfile
+# Set GEMINI_GATEWAY_MODEL to your available provider model.
 bun run src/index.ts serve
 ```
 
-## Environment Variables
+Point Claude Code at `http://127.0.0.1:4141` using an explicit local settings override. Configure its model for your provider. Do not copy OAuth tokens or change Claude Code's tool permission boundaries.
 
-- `GEMINI_API_KEY`: Official Google AI Studio API key.
-- `GEMINI_GATEWAY_PORT`: Port to listen on (default: `4141`).
-- `GEMINI_GATEWAY_HOST`: Host to bind to (default: `127.0.0.1`).
-- `GEMINI_MODEL`: Default model to map to (default: `gemini-3.8-flash`).
+## Configuration
 
-## License
+| Variable | Meaning |
+| --- | --- |
+| GEMINI_GATEWAY_CONFIG | Optional JSON file with string-valued env configuration; process environment wins |
+| GEMINI_GATEWAY_MODEL / GEMINI_MODEL | Explicit Google model; no Claude alias mapping |
+| GEMINI_GATEWAY_PORT | Loopback port, default 4141 |
+| GEMINI_GATEWAY_HOST | Loopback address only, default 127.0.0.1 |
+| GEMINI_GATEWAY_TIMEOUT_MS | HTTP/tool cycle deadline, default 300000 ms |
+| GEMINI_GATEWAY_STATE_DIR | Lifecycle state directory; defaults under HOME |
+| GEMINI_API_KEY | Official Developer API key |
+| VERTEX_PROJECT_ID / GOOGLE_CLOUD_PROJECT / ANTHROPIC_VERTEX_PROJECT_ID | Explicit Google Cloud project |
+| VERTEX_LOCATION / CLOUD_ML_REGION | Google Cloud region, default us-central1 |
+| GOOGLE_OAUTH_TOKEN | Official Google Cloud access token for Vertex; caller owns refresh |
 
-MIT
+## Diagnostics and lifecycle
+
+`bin/gateway.sh start`, `status`, `doctor`, and `stop` manage a local daemon. `GET /health` and `/healthz` report gateway/version/configuration; `GET /v1/models` reports provider catalog information; `POST /v1/messages` translates inference. A healthy process is not inference entitlement. Restarting invalidates pending tool cycles.
+
+## Verification
+
+```bash
+bun run lint
+bun run typecheck
+bun run test
+```
+
+The canonical test command is `bun run test` (`bun test tests`). Gateway CI runs these checks after frozen installation. Use disposable state directories for lifecycle tests and port zero for HTTP fixtures. Record live provider and Claude-owned tool acceptance separately.
+
+## Community and security
+
+See [CONTRIBUTING](CONTRIBUTING.md), [SECURITY](SECURITY.md), and [CODE_OF_CONDUCT](CODE_OF_CONDUCT.md). Licensed under [MIT](LICENSE).

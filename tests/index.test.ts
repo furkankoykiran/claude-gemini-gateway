@@ -10,7 +10,7 @@ import type { AnthropicMessagesRequest } from "../src/types.ts";
 
 describe("claude-gemini-gateway: translation & mapping", () => {
   it("resolves model names correctly", () => {
-    expect(resolveGeminiModel("claude-3-5-sonnet-latest")).toBe("gemini-3.8-flash");
+    expect(() => resolveGeminiModel("claude-3-5-sonnet-latest", {})).toThrow("Select a Google model ID");
     expect(resolveGeminiModel("gemini-2.5-pro")).toBe("gemini-2.5-pro");
     expect(resolveGeminiModel("gemini-3.8-flash")).toBe("gemini-3.8-flash");
     expect(resolveGeminiModel("custom", { GEMINI_MODEL: "gemini-2.5-flash" } as any)).toBe(
@@ -33,9 +33,9 @@ describe("claude-gemini-gateway: translation & mapping", () => {
     expect(geminiReq.systemInstruction?.parts[0]?.text).toBe("You are a helpful coding assistant.");
     expect(geminiReq.contents.length).toBe(3);
     expect(geminiReq.contents[0].role).toBe("user");
-    expect(geminiReq.contents[0].parts[0].text).toBe("Write a function");
+    expect((geminiReq.contents[0].parts[0] as any).text).toBe("Write a function");
     expect(geminiReq.contents[1].role).toBe("model");
-    expect(geminiReq.contents[1].parts[0].text).toBe("function foo() {}");
+    expect((geminiReq.contents[1].parts[0] as any).text).toBe("function foo() {}");
     expect(geminiReq.contents[2].role).toBe("user");
   });
 
@@ -165,6 +165,7 @@ describe("claude-gemini-gateway: policy safety & auth", () => {
   it("resolves valid Vertex AI credentials", () => {
     const creds = resolveGoogleCredentials({
       ANTHROPIC_VERTEX_PROJECT_ID: "my-project",
+      GOOGLE_OAUTH_TOKEN: "fixture-cloud-token",
       CLOUD_ML_REGION: "us-central1",
     } as any);
     expect(creds.kind).toBe("vertex");
@@ -186,15 +187,17 @@ describe("claude-gemini-gateway: policy safety & auth", () => {
 });
 
 describe("claude-gemini-gateway: HTTP endpoints", () => {
-  const TEST_PORT = 4149;
+  let TEST_PORT: number;
   let server: any;
 
   beforeAll(() => {
     server = createGatewayServer({
-      port: TEST_PORT,
+      port: 0,
       host: "127.0.0.1",
       env: { GEMINI_API_KEY: "AIzaMockKey" } as any,
+      fetch: (async () => Response.json({ models: [{ name: "models/runtime-model", supportedGenerationMethods: ["generateContent"] }] })) as unknown as typeof fetch,
     });
+    TEST_PORT = server.port;
   });
 
   afterAll(() => {
@@ -214,18 +217,18 @@ describe("claude-gemini-gateway: HTTP endpoints", () => {
     expect(res.status).toBe(200);
     const body: any = await res.json();
     expect(Array.isArray(body.data)).toBe(true);
-    expect(body.data.some((m: any) => m.id === "gemini-3.8-flash")).toBe(true);
+    expect(body.data.some((m: any) => m.id === "runtime-model")).toBe(true);
   });
 
   it("returns 401 when consumer OAuth is presented without official credentials", async () => {
     const lockedServer = createGatewayServer({
-      port: 4150,
+      port: 0,
       host: "127.0.0.1",
       env: { ANTIGRAVITY_AGENTAPI_EXE: "/path/to/exe" } as any,
     });
 
     try {
-      const res = await fetch("http://127.0.0.1:4150/v1/messages", {
+      const res = await fetch(`http://127.0.0.1:${lockedServer.port}/v1/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -237,7 +240,7 @@ describe("claude-gemini-gateway: HTTP endpoints", () => {
       expect(res.status).toBe(401);
       const json: any = await res.json();
       expect(json.error.message).toContain("Personal Antigravity consumer OAuth cannot be reused");
-      expect(json.error.message).toContain("agy -p");
+      expect(json.error.message).toContain("native 'agy' CLI");
     } finally {
       lockedServer.stop();
     }
