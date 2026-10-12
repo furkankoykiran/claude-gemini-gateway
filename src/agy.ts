@@ -67,6 +67,7 @@ export async function agyInference(env: Environment, model: string | undefined, 
       const child = spawn(env.AGY_GATEWAY_BIN || "agy", args, { cwd: workspace, env, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "ignore"] });
       closed = new Promise((done) => child.once("close", () => done()));
       let buffer = "", conversation = "", actualModel = "", terminal = false, settled = false;
+      const decoder = new TextDecoder("utf-8", { fatal: true });
       let validated: { output: any; model: string; conversation: string } | undefined;
       const finish = (error?: Error, value?: any) => {
         if (settled) return;
@@ -103,7 +104,7 @@ export async function agyInference(env: Environment, model: string | undefined, 
       child.stdout!.on("data", (data) => {
         if (settled) return;
         try {
-          buffer += data.toString();
+          buffer += decoder.decode(data, { stream: true });
           if (buffer.length > 8_000_000) throw new Error("AGY protocol output exceeded the limit.");
           let end;
           while ((end = buffer.indexOf("\n")) >= 0) { const line = buffer.slice(0, end).trim(); buffer = buffer.slice(end + 1); if (line) consume(line); }
@@ -113,6 +114,7 @@ export async function agyInference(env: Environment, model: string | undefined, 
       child.stdin!.on("error", () => finish(new Error("AGY input channel failed.")));
       child.on("error", () => finish(new Error("AGY executable is unavailable.")));
       child.on("close", (code) => {
+        try { buffer += decoder.decode(); } catch { finish(new Error("Malformed AGY UTF-8 output.")); return; }
         if (code === 0 && terminal && validated && !buffer.trim()) finish(undefined, validated);
         else finish(new Error("AGY ended without a valid result; check native authentication."));
       });

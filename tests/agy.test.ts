@@ -29,7 +29,8 @@ for await (const line of console){
  let text=prompt.current_user_text||'RESULT_SEEN';
  const nonce=text.match(/exactly ([a-f0-9-]+) and/);if(nonce)text=nonce[1];
  const tool_calls=text==='REQUEST_TOOL'?[{name:'fixture_external',input:{value:'nested'}}]:[];
- console.log(JSON.stringify({event:'result',result:{conversation_id:mode==='stale'?'other':conversation,status:'SUCCESS',num_turns:1,structured_output:{text:tool_calls.length?'':text,tool_calls}}}));
+ const row=JSON.stringify({event:'result',result:{conversation_id:mode==='stale'?'other':conversation,status:'SUCCESS',num_turns:1,structured_output:{text:mode==='unicode'?'Güncel Türkçe ☕':tool_calls.length?'':text,tool_calls}}});
+ if(mode==='unicode'){const bytes=Buffer.from(row+'\\n');const split=bytes.indexOf(Buffer.from('ü'))+1;process.stdout.write(bytes.subarray(0,split));await new Promise(r=>setTimeout(r,10));process.stdout.write(bytes.subarray(split));}else console.log(row);
  if(mode==='late'){await new Promise(r=>setTimeout(r,10));console.log(JSON.stringify({event:'result',result:{}}));}
  process.exit(0);
 }
@@ -90,4 +91,9 @@ test("the HTTP adapter forwards a catalog model selected in the request when no 
     expect(body.model).toBe("catalog-choice");
     expect(body.content[0].text).toBe("NEW_MODEL_TURN");
   } finally { server.stop(true); }
+});
+
+test("fragmented native UTF-8 preserves multilingual text", async () => {
+  const result = await agyInference(env("unicode"), "fixture-model", { current_user_text: "current" }, AbortSignal.timeout(2000));
+  expect(result.output.text).toBe("Güncel Türkçe ☕");
 });
