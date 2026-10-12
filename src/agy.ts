@@ -67,6 +67,7 @@ export async function agyInference(env: Environment, model: string | undefined, 
       const child = spawn(env.AGY_GATEWAY_BIN || "agy", args, { cwd: workspace, env, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "ignore"] });
       closed = new Promise((done) => child.once("close", () => done()));
       let buffer = "", conversation = "", actualModel = "", terminal = false, settled = false;
+      let validated: { output: any; model: string; conversation: string } | undefined;
       const finish = (error?: Error, value?: any) => {
         if (settled) return;
         settled = true;
@@ -96,8 +97,7 @@ export async function agyInference(env: Environment, model: string | undefined, 
           if (!output || Object.keys(output).some((key) => !["text", "tool_calls"].includes(key)) || typeof output.text !== "string" || !Array.isArray(output.tool_calls) || (!output.text && !output.tool_calls.length)) throw new Error("AGY returned malformed structured output.");
           terminal = true;
           child.stdin!.end();
-          // Drain this chunk before accepting; termination prevents any subsequent native work.
-          queueMicrotask(() => finish(undefined, { output, model: actualModel, conversation }));
+          validated = { output, model: actualModel, conversation };
         } else throw new Error("Unknown AGY protocol event.");
       };
       child.stdout!.on("data", (data) => {
@@ -112,7 +112,10 @@ export async function agyInference(env: Environment, model: string | undefined, 
       });
       child.stdin!.on("error", () => finish(new Error("AGY input channel failed.")));
       child.on("error", () => finish(new Error("AGY executable is unavailable.")));
-      child.on("close", () => { if (!terminal) finish(new Error("AGY ended without a valid result; check native authentication.")); });
+      child.on("close", (code) => {
+        if (code === 0 && terminal && validated && !buffer.trim()) finish(undefined, validated);
+        else finish(new Error("AGY ended without a valid result; check native authentication."));
+      });
     });
     await closed;
     const proof = (await readFile(join(workspace, "guard.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));

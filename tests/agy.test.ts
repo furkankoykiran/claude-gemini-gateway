@@ -29,7 +29,8 @@ for await (const line of console){
  const nonce=text.match(/exactly ([a-f0-9-]+) and/);if(nonce)text=nonce[1];
  const tool_calls=text==='REQUEST_TOOL'?[{name:'fixture_external',input:{value:'nested'}}]:[];
  console.log(JSON.stringify({event:'result',result:{conversation_id:mode==='stale'?'other':conversation,status:'SUCCESS',num_turns:1,structured_output:{text:tool_calls.length?'':text,tool_calls}}}));
- if(mode==='late')console.log(JSON.stringify({event:'result',result:{}}));
+ if(mode==='late'){await new Promise(r=>setTimeout(r,10));console.log(JSON.stringify({event:'result',result:{}}));}
+ process.exit(0);
 }
 `, { mode: 0o700 });
 const env = (mode = "valid") => ({ ...process.env, GEMINI_GATEWAY_ADAPTER: "agy-cli", AGY_GATEWAY_BIN: binary, AGY_GATEWAY_MODEL: "fixture-model", FIXTURE_MODE: mode });
@@ -40,15 +41,15 @@ test("native CLI discovery and authenticated nonce preflight need no API key", a
   expect(await preflight(env(), AbortSignal.timeout(2000))).toEqual({ adapter: "agy-cli", model: "fixture-model", authenticated: true });
 });
 for (const mode of ["unauthenticated", "malformed", "stale", "native", "late", "timeout"]) test(`AGY ${mode} fails closed`, async () => {
-  expect(agyInference(env(mode), "fixture-model", { current_user_text: "nonce" }, AbortSignal.timeout(150))).rejects.toThrow();
+  await expect(agyInference(env(mode), "fixture-model", { current_user_text: "nonce" }, AbortSignal.timeout(150))).rejects.toThrow();
 });
 test("missing native binary fails closed", async () => {
-  expect(preflight({ ...env(), AGY_GATEWAY_BIN: join(root, "missing") }, AbortSignal.timeout(200))).rejects.toThrow();
+  await expect(preflight({ ...env(), AGY_GATEWAY_BIN: join(root, "missing") }, AbortSignal.timeout(200))).rejects.toThrow();
 });
 test("Gemini missing/invalid credentials cannot fall back to AGY", async () => {
   const api = { GEMINI_GATEWAY_ADAPTER: "gemini-api", GEMINI_GATEWAY_MODEL: "fixture-model", AGY_GATEWAY_BIN: binary };
-  expect(preflight(api, AbortSignal.timeout(200))).rejects.toThrow();
-  expect(preflight({ ...api, GEMINI_API_KEY: "fixture-key" }, AbortSignal.timeout(200), async () => new Response("denied", { status: 401 }))).rejects.toThrow();
+  await expect(preflight(api, AbortSignal.timeout(200))).rejects.toThrow();
+  await expect(preflight({ ...api, GEMINI_API_KEY: "fixture-key" }, AbortSignal.timeout(200), async () => new Response("denied", { status: 401 }))).rejects.toThrow();
   const result = await preflight({ ...api, GEMINI_API_KEY: "fixture-key" }, AbortSignal.timeout(200), async (_, init) => {
     const text = JSON.parse(init!.body as string).contents[0].parts[0].text.replace('Reply exactly ', '');
     return Response.json({ candidates: [{ finishReason: "STOP", content: { parts: [{ text }] } }] });
