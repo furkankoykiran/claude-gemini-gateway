@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { agyInference, agyCatalog } from "../src/agy.ts";
+import { agyInference, agyCatalog, resolveAgyModel } from "../src/agy.ts";
 import { preflight, createGatewayServer } from "../src/server.ts";
 
 const root = await mkdtemp(join(tmpdir(), "agy-fixture-"));
@@ -68,4 +68,12 @@ test("external tools, one result continuation, and fresh text have strict owners
     messages.push({ role: "user", content: "FRESH_TURN" });
     expect((await (await post(messages)).json()).content[0].text).toBe("FRESH_TURN");
   } finally { server.stop(true); }
+});
+
+test("explicit native request models are honored; only frontend aliases delegate to native defaults", () => {
+  expect(resolveAgyModel("catalog-selected-model", {})).toBe("catalog-selected-model");
+  expect(resolveAgyModel("agy", {})).toBeUndefined();
+  expect(resolveAgyModel("claude-frontend-alias", {})).toBeUndefined();
+  expect(resolveAgyModel("catalog-selected-model", { AGY_GATEWAY_MODEL: "configured-model" })).toBe("configured-model");
+  expect(() => resolveAgyModel("<placeholder>", {})).toThrow();
 });

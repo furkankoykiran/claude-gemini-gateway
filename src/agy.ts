@@ -127,3 +127,9 @@ export async function agyInference(env: Environment, model: string | undefined, 
 export function agyPrompt(request: AnthropicMessagesRequest, current: { text: string; results: unknown[] }) {
   return { system: request.system, history: request.messages.slice(0, -1), current_user_text: current.text, current_tool_results: current.text ? [] : current.results, external_tools: request.tools ?? [] };
 }
+
+export function resolveAgyModel(requestModel: string, env: Environment): string | undefined {
+  const selected = env.AGY_GATEWAY_MODEL || (requestModel === "agy" || requestModel.startsWith("claude-") ? undefined : requestModel);
+  if (selected && !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(selected)) throw new Error("Invalid native model selection.");
+  return selected;
+}

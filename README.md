@@ -31,7 +31,7 @@ Point Claude Code at `http://127.0.0.1:4141` using an explicit local settings ov
 | --- | --- |
 | GEMINI_GATEWAY_ADAPTER | `agy-cli`, `gemini-api`, or `vertex`; omitted selects API credentials for compatibility |
 | AGY_GATEWAY_BIN | Official executable from PATH (`agy`) or configured path |
-| AGY_GATEWAY_MODEL / AGY_GATEWAY_EFFORT | Optional native model/effort; omitted delegates selection to AGY |
+| AGY_GATEWAY_MODEL / AGY_GATEWAY_EFFORT | Optional native model/effort; configured model wins, otherwise explicit request model is honored; frontend alias delegates to AGY |
 | AGY_GATEWAY_WORKSPACE_ROOT | Existing directory for disposable guarded native workspaces; defaults to OS temp |
 | GEMINI_GATEWAY_API_BASE_URL | Optional API/Vertex base URL, including API version, for configured transports |
 | GEMINI_GATEWAY_CONFIG | Optional JSON file with string-valued env configuration; process environment wins |
