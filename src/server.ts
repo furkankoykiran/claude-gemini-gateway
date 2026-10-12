@@ -1,3 +1,4 @@
+import { agyCatalog, agyInference, agyPrompt } from "./agy.ts";
 import { version } from "../package.json";
 import { resolveGoogleCredentials } from "./auth.ts";
 import { resolveGeminiModel, translateAnthropicToGemini, translateGeminiToAnthropic } from "./translate.ts";
@@ -56,7 +57,7 @@ async function readGoogleStream(response: Response): Promise<any> {
   }
 }
 
-function anthropicSse(message: any): string {
+export function anthropicSse(message: any): string {
   const events: string[] = [];
   const send = (type: string, data: object) => events.push(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
   send("message_start", { message: { ...message, content: [], stop_reason: null, usage: { ...message.usage, output_tokens: 0 } } });
@@ -72,6 +73,7 @@ function anthropicSse(message: any): string {
 
 export function createGatewayServer(options: ServerOptions = {}) {
   const env = options.env ?? process.env;
+  const adapter = resolveAdapter(env);
   const port = options.port ?? Number(env.GEMINI_GATEWAY_PORT ?? 4141);
   const host = options.host ?? env.GEMINI_GATEWAY_HOST ?? "127.0.0.1";
   if (!["127.0.0.1", "::1", "localhost"].includes(host)) throw new Error("Gateway must bind to loopback.");
@@ -86,12 +88,12 @@ export function createGatewayServer(options: ServerOptions = {}) {
       const url = new URL(req.url);
       if (["/health", "/healthz"].includes(url.pathname)) {
         let auth = "unavailable";
-        try { auth = resolveGoogleCredentials(env).kind; } catch {}
-        return Response.json({ ok: true, status: "ok", provider: "gemini", version, model: env.GEMINI_GATEWAY_MODEL || env.GEMINI_MODEL || null, execution_owner: "claude-code", timeout_ms: timeoutMs, auth });
+        try { auth = adapter === "agy-cli" ? "native-cli-not-preflighted" : resolveGoogleCredentials(env).kind; } catch {}
+        return Response.json({ ok: true, status: "ok", provider: "gemini", adapter, version, model: env.GEMINI_GATEWAY_MODEL || env.GEMINI_MODEL || null, execution_owner: "claude-code", timeout_ms: timeoutMs, auth });
       }
       if (url.pathname !== "/v1/models" && (url.pathname !== "/v1/messages" || req.method !== "POST")) return new Response("Not Found", { status: 404 });
       let creds;
-      try { creds = resolveGoogleCredentials(env); } catch (error) { return failure((error as Error).message, 401); }
+      try { creds = adapter === "agy-cli" ? undefined : resolveGoogleCredentials(env); } catch (error) { return failure((error as Error).message, 401); }
       const controller = new AbortController();
       const cancel = () => controller.abort();
       req.signal.addEventListener("abort", cancel, { once: true });
@@ -99,13 +101,31 @@ export function createGatewayServer(options: ServerOptions = {}) {
       active.add(controller);
       const deadline = setTimeout(cancel, timeoutMs);
       const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (creds.kind === "api-key") headers["x-goog-api-key"] = creds.apiKey!;
-      else headers.Authorization = `Bearer ${env.GOOGLE_OAUTH_TOKEN}`;
-      const base = creds.kind === "api-key" ? "https://generativelanguage.googleapis.com/v1beta" : `https://${creds.location}-aiplatform.googleapis.com/v1/projects/${encodeURIComponent(creds.project!)}/locations/${encodeURIComponent(creds.location!)}/publishers/google`;
+      if (creds?.kind === "api-key") headers["x-goog-api-key"] = creds.apiKey!;
+      else if (creds) headers.Authorization = `Bearer ${env.GOOGLE_OAUTH_TOKEN}`;
+      const base = googleBase(env, creds);
       try {
+        if (adapter === "agy-cli") {
+          if (url.pathname === "/v1/models") return Response.json({ data: (await agyCatalog(env, controller.signal)).map((id) => ({ id, object: "model", owned_by: "antigravity" })) });
+          const body: AnthropicMessagesRequest = await req.json();
+          let current;
+          const selected = env.AGY_GATEWAY_MODEL || undefined;
+          try { current = currentTurn(body); cycles.claim(body, req.headers.get("x-claude-code-session-id"), selected || "native-default"); }
+          catch (error) { return failure((error as Error).message, 400); }
+          const result = await agyInference(env, selected, agyPrompt(body, current), controller.signal);
+          if (controller.signal.aborted) throw new Error("cancelled");
+          const calls = result.output.tool_calls.map((call: any) => {
+            const tool = body.tools?.find((tool) => tool.name === call.name);
+            if (!tool || !call.input || typeof call.input !== "object" || Array.isArray(call.input) || tool.input_schema.required?.some((key) => !(key in call.input))) throw new Error("Invalid external tool proposal.");
+            return { type: "tool_use", id: `call_${crypto.randomUUID()}`, name: call.name, input: call.input };
+          });
+          cycles.issue(calls, calls, req.headers.get("x-claude-code-session-id"), selected || "native-default");
+          const message = { id: `msg_${crypto.randomUUID()}`, type: "message", role: "assistant", model: result.model, content: [...(result.output.text ? [{ type: "text", text: result.output.text }] : []), ...calls], stop_reason: calls.length ? "tool_use" : "end_turn", stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } };
+          return body.stream ? new Response(anthropicSse(message), { headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache" } }) : Response.json(message);
+        }
         if (url.pathname === "/v1/models") {
           if (req.method !== "GET") return new Response("Not Found", { status: 404 });
-          if (creds.kind === "vertex") {
+          if (creds!.kind === "vertex") {
             const model = env.GEMINI_GATEWAY_MODEL || env.GEMINI_MODEL;
             if (!model) return failure("Configure a Vertex model; model discovery is unavailable for this transport.", 400);
             return Response.json({ data: [{ id: resolveGeminiModel(model, env), object: "model", owned_by: "google", configured: true }], discovery: "configured-only" });
@@ -165,4 +185,43 @@ export function createGatewayServer(options: ServerOptions = {}) {
   const originalStop = server.stop.bind(server);
   server.stop = ((closeActive?: boolean) => { for (const controller of active) controller.abort(); cycles.clear(); return originalStop(closeActive); }) as typeof server.stop;
   return server;
+}
+
+/** Explicit adapter selection prevents consumer auth from becoming API auth. */
+export function resolveAdapter(env: Record<string, string | undefined>): "agy-cli" | "gemini-api" | "vertex" {
+  const adapter = env.GEMINI_GATEWAY_ADAPTER || (env.GOOGLE_OAUTH_TOKEN ? "vertex" : "gemini-api");
+  if (!["agy-cli", "gemini-api", "vertex"].includes(adapter)) throw new Error("Unknown Google gateway adapter.");
+  if (adapter !== "agy-cli") {
+    let credentials;
+    try { credentials = resolveGoogleCredentials(env); } catch { return adapter as "gemini-api" | "vertex"; }
+    if ((adapter === "vertex") !== (credentials.kind === "vertex")) throw new Error("Credentials do not match the selected Google adapter.");
+  }
+  return adapter as "agy-cli" | "gemini-api" | "vertex";
+}
+
+function googleBase(env: Record<string, string | undefined>, creds: ReturnType<typeof resolveGoogleCredentials> | undefined) {
+  if (!creds) return "";
+  return (env.GEMINI_GATEWAY_API_BASE_URL || (creds.kind === "api-key" ? "https://generativelanguage.googleapis.com/v1beta" : `https://${creds.location}-aiplatform.googleapis.com/v1/projects/${encodeURIComponent(creds.project!)}/locations/${encodeURIComponent(creds.location!)}/publishers/google`)).replace(/\/$/, "");
+}
+
+export async function preflight(env: Record<string, string | undefined>, signal: AbortSignal, upstream: NonNullable<ServerOptions["fetch"]> = fetch) {
+  const adapter = resolveAdapter(env);
+  const nonce = crypto.randomUUID();
+  if (adapter === "agy-cli") {
+    const models = await agyCatalog(env, signal);
+    if (env.AGY_GATEWAY_MODEL && !models.includes(env.AGY_GATEWAY_MODEL)) throw new Error("Configured AGY model is absent from the native catalog.");
+    const result = await agyInference(env, env.AGY_GATEWAY_MODEL, { current_user_text: `Reply with text exactly ${nonce} and no tool_calls.` }, signal);
+    if (result.output.text !== nonce || result.output.tool_calls.length) throw new Error("AGY preflight did not return the current nonce.");
+    return { adapter, model: result.model, authenticated: true };
+  }
+  const creds = resolveGoogleCredentials(env);
+  const model = resolveGeminiModel(env.GEMINI_GATEWAY_MODEL || env.GEMINI_MODEL || "", env);
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (creds.kind === "api-key") headers["x-goog-api-key"] = creds.apiKey!;
+  else headers.Authorization = `Bearer ${env.GOOGLE_OAUTH_TOKEN}`;
+  const response = await upstream(`${googleBase(env, creds)}/models/${encodeURIComponent(model)}:generateContent`, { method: "POST", headers, signal, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: `Reply exactly ${nonce}` }] }], generationConfig: { maxOutputTokens: 128 } }) });
+  if (!response.ok) throw new Error(`Google credential/inference preflight failed (${response.status}).`);
+  const message: any = translateGeminiToAnthropic(await response.json(), model);
+  if (message.content.some((block: any) => block.type !== "text") || !message.content.map((block: any) => block.text).join("").includes(nonce)) throw new Error("Google preflight did not return the current nonce.");
+  return { adapter, model, authenticated: true };
 }
