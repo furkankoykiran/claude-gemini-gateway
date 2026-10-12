@@ -11,3 +11,15 @@ Cancellation signals the provider before accepting later events as completion. P
 Installed JCode v0.95.0 (6487bbd7e), including its version metadata and CLI surface, was inspected without changing its configuration or authentication. Upstream [1jehuang/jcode](https://github.com/1jehuang/jcode/tree/b3d4e2143670dd5aeafc81649d85eabdf1bc9d18) was inspected at b3d4e2143670dd5aeafc81649d85eabdf1bc9d18. Its `crates/jcode-provider-core/src/lib.rs` provider trait separates inference from harness concerns; `crates/jcode-app-core/src/server/client_lifecycle.rs` dispatches cancellation before outbound acknowledgements.
 
 These are architectural references only. No JCode code was copied. Its MIT license requires retaining its copyright/permission notice when copying substantial code. This family retains Claude Code as the execution authority and does not adopt JCode's credential or execution ownership.
+
+## Explicit Google adapters
+
+```mermaid
+flowchart LR
+  C[Claude Code: MCP, hooks, permissions, tools] --> G[Messages gateway and pending tool cycles]
+  G --> A[agy-cli: official local CLI, native auth, deny guard]
+  G --> D[gemini-api: Developer API credentials]
+  G --> V[vertex: project and Cloud token]
+```
+
+Native inference uses fresh conversations and text context because official AGY stdin does not expose external tool-result callbacks. API transports retain their native function-call/thought-signature handling. No third-party implementation is copied. Official CLI documentation informed protocol/guard behavior; JCode was inspected only for architecture and its direct token transport is deliberately not used.
