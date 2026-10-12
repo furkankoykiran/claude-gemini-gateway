@@ -56,9 +56,9 @@ export async function agyInference(env: Environment, model: string | undefined, 
   try {
     await mkdir(join(workspace, ".agents"), { recursive: true });
     const nonce = crypto.randomUUID();
-    await writeFile(join(workspace, ".agents", "guard.cjs"), `const fs=require('node:fs');const r=JSON.parse(fs.readFileSync(0,'utf8'));fs.appendFileSync('../guard.jsonl',JSON.stringify({nonce:${JSON.stringify(nonce)},conversation:r.conversationId,denied:!!r.toolCall})+'\\n');if(r.toolCall)process.stdout.write(JSON.stringify({decision:'deny',reason:'Claude Code owns all tool execution.'}));`);
+    await writeFile(join(workspace, ".agents", "guard.cjs"), `const fs=require('node:fs');const deny=process.argv[2]==='deny';let r={};try{r=JSON.parse(fs.readFileSync(0,'utf8'))}catch{}try{fs.appendFileSync('../guard.jsonl',JSON.stringify({nonce:${JSON.stringify(nonce)},conversation:r.conversationId,denied:deny})+'\\n')}catch{if(!deny)process.exit(1)}if(deny)process.stdout.write(JSON.stringify({decision:'deny',reason:'Claude Code owns all tool execution.'}));`);
     const hook = `${shellQuote(process.execPath)} guard.cjs`;
-    await writeFile(join(workspace, ".agents", "hooks.json"), JSON.stringify({ "gateway-native-deny": { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: hook, timeout: 30 }] }], PreInvocation: [{ command: hook }] } }));
+    await writeFile(join(workspace, ".agents", "hooks.json"), JSON.stringify({ "gateway-native-deny": { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: `${hook} deny`, timeout: 30 }] }], PreInvocation: [{ command: `${hook} invocation` }] } }));
 
     const args = [ "--input-format", "stream-json", "--output-format", "stream-json", "--disable-slash-commands"];
     if (model) args.push("--model", model);

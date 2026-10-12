@@ -9,7 +9,7 @@ const root = await mkdtemp(join(tmpdir(), "agy-fixture-"));
 const binary = join(root, "agy");
 // Native session files and credentials are deliberately absent. The fixture invokes the generated guard.
 await writeFile(binary, `#!/usr/bin/env bun
-import {readFile,appendFile} from 'node:fs/promises';
+import {readFile,appendFile,writeFile} from 'node:fs/promises';
 const mode=process.env.FIXTURE_MODE;
 if(process.argv.includes('--help')) {console.error('--agent --input-format --output-format --json-schema --disable-slash-commands');process.exit(0)}
 if(process.argv.includes('models')){console.log('fixture-model Fixture model');process.exit(0)}
@@ -22,6 +22,7 @@ for await (const line of console){
  const command=hooks['gateway-native-deny'].PreInvocation[0].command;
  const guard=Bun.spawn(['sh','-c',command],{cwd:'.agents',stdin:'pipe',stdout:'pipe'});
  guard.stdin.write(JSON.stringify({conversationId:conversation}));guard.stdin.end();await guard.exited;
+ if(mode==='guard-schema'){const g=Bun.spawn(['sh','-c',hooks['gateway-native-deny'].PreToolUse[0].hooks[0].command],{cwd:'.agents',stdin:'pipe',stdout:'pipe'});g.stdin.write('malformed hook input');g.stdin.end();const reply=await new Response(g.stdout).text();await g.exited;await writeFile(process.env.FIXTURE_GUARD_REPLY,reply);}
  if(mode==='native'){console.log(JSON.stringify({event:'step_update',step_update:{conversation_id:conversation,step_type:'tool',tool_name:'any-native-tool'}}));continue}
  if(mode==='timeout'){await new Promise(()=>{});continue}
  if(mode==='malformed'){console.log('not-json');continue}
@@ -110,4 +111,10 @@ test("doctor reads native adapter configuration without requiring or claiming AP
   expect(output).toContain("Google adapter: agy-cli");
   expect(output).toContain("authentication is owned by AGY and requires preflight");
   expect(output).not.toContain("Auth configured: api-key");
+});
+
+test("native PreToolUse always denies even malformed or changed hook input", async () => {
+  const reply = join(root, "guard-reply.json");
+  await expect(agyInference({ ...env("guard-schema"), FIXTURE_GUARD_REPLY: reply }, "fixture-model", { current_user_text: "current" }, AbortSignal.timeout(2000))).rejects.toThrow();
+  expect(JSON.parse(await Bun.file(reply).text()).decision).toBe("deny");
 });
