@@ -9,7 +9,7 @@ const root = await mkdtemp(join(tmpdir(), "agy-fixture-"));
 const binary = join(root, "agy");
 // Native session files and credentials are deliberately absent. The fixture invokes the generated guard.
 await writeFile(binary, `#!/usr/bin/env bun
-import {readFile,appendFile} from 'node:fs/promises';
+import {readFile,appendFile,writeFile} from 'node:fs/promises';
 const mode=process.env.FIXTURE_MODE;
 if(process.argv.includes('--help')) {console.error('--agent --input-format --output-format --json-schema --disable-slash-commands');process.exit(0)}
 if(process.argv.includes('models')){console.log('fixture-model Fixture model');process.exit(0)}
@@ -22,6 +22,7 @@ for await (const line of console){
  const command=hooks['gateway-native-deny'].PreInvocation[0].command;
  const guard=Bun.spawn(['sh','-c',command],{cwd:'.agents',stdin:'pipe',stdout:'pipe'});
  guard.stdin.write(JSON.stringify({conversationId:conversation}));guard.stdin.end();await guard.exited;
+ if(mode==='guard-schema'){const g=Bun.spawn(['sh','-c',hooks['gateway-native-deny'].PreToolUse[0].hooks[0].command],{cwd:'.agents',stdin:'pipe',stdout:'pipe'});g.stdin.write('malformed hook input');g.stdin.end();const reply=await new Response(g.stdout).text();await g.exited;await writeFile(process.env.FIXTURE_GUARD_REPLY,reply);}
  if(mode==='native'){console.log(JSON.stringify({event:'step_update',step_update:{conversation_id:conversation,step_type:'tool',tool_name:'any-native-tool'}}));continue}
  if(mode==='timeout'){await new Promise(()=>{});continue}
  if(mode==='malformed'){console.log('not-json');continue}
@@ -75,7 +76,7 @@ test("external tools, one result continuation, and fresh text have strict owners
 test("explicit native request models are honored; only frontend aliases delegate to native defaults", () => {
   expect(resolveAgyModel("catalog-selected-model", {})).toBe("catalog-selected-model");
   expect(resolveAgyModel("agy", {})).toBeUndefined();
-  expect(resolveAgyModel("claude-frontend-alias", {})).toBeUndefined();
+  expect(resolveAgyModel("claude-runtime-model", {})).toBe("claude-runtime-model");
   expect(resolveAgyModel("catalog-selected-model", { AGY_GATEWAY_MODEL: "configured-model" })).toBe("configured-model");
   expect(() => resolveAgyModel("<placeholder>", {})).toThrow();
 });
@@ -85,10 +86,10 @@ test("the HTTP adapter forwards a catalog model selected in the request when no 
   delete nativeEnv.AGY_GATEWAY_MODEL;
   const server = createGatewayServer({ port: 0, env: nativeEnv });
   try {
-    const response = await fetch(`${server.url}v1/messages`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "catalog-choice", messages: [{ role: "user", content: "NEW_MODEL_TURN" }] }) });
+    const response = await fetch(`${server.url}v1/messages`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-catalog-choice", messages: [{ role: "user", content: "NEW_MODEL_TURN" }] }) });
     const body: any = await response.json();
     expect(response.status).toBe(200);
-    expect(body.model).toBe("catalog-choice");
+    expect(body.model).toBe("claude-catalog-choice");
     expect(body.content[0].text).toBe("NEW_MODEL_TURN");
   } finally { server.stop(true); }
 });
@@ -96,4 +97,24 @@ test("the HTTP adapter forwards a catalog model selected in the request when no 
 test("fragmented native UTF-8 preserves multilingual text", async () => {
   const result = await agyInference(env("unicode"), "fixture-model", { current_user_text: "current" }, AbortSignal.timeout(2000));
   expect(result.output.text).toBe("Güncel Türkçe ☕");
+});
+
+test("doctor reads native adapter configuration without requiring or claiming API credentials", async () => {
+  const config = join(root, "doctor.json");
+  await writeFile(config, JSON.stringify({ env: { GEMINI_GATEWAY_ADAPTER: "agy-cli", AGY_GATEWAY_BIN: binary } }));
+  const environment: Record<string, string | undefined> = { ...process.env, GEMINI_GATEWAY_CONFIG: config, FIXTURE_MODE: "unauthenticated" };
+  delete environment.GEMINI_GATEWAY_ADAPTER;
+  delete environment.GEMINI_API_KEY;
+  const child = Bun.spawn([process.execPath, "run", join(import.meta.dir, "../src/index.ts"), "doctor"], { env: environment, stdout: "pipe", stderr: "pipe" });
+  const output = await new Response(child.stdout).text();
+  expect(await child.exited).toBe(0);
+  expect(output).toContain("Google adapter: agy-cli");
+  expect(output).toContain("authentication is owned by AGY and requires preflight");
+  expect(output).not.toContain("Auth configured: api-key");
+});
+
+test("native PreToolUse always denies even malformed or changed hook input", async () => {
+  const reply = join(root, "guard-reply.json");
+  await expect(agyInference({ ...env("guard-schema"), FIXTURE_GUARD_REPLY: reply }, "fixture-model", { current_user_text: "current" }, AbortSignal.timeout(2000))).rejects.toThrow();
+  expect(JSON.parse(await Bun.file(reply).text()).decision).toBe("deny");
 });

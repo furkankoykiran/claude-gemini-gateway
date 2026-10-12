@@ -1,6 +1,7 @@
 import { version } from "../package.json";
-import { createGatewayServer, preflight } from "./server.ts";
-import { resolveGoogleCredentials, detectConsumerOAuth } from "./auth.ts";
+import { agyCatalog } from "./agy.ts";
+import { createGatewayServer, preflight, resolveAdapter } from "./server.ts";
+import { resolveGoogleCredentials } from "./auth.ts";
 
 export * from "./types.ts";
 export * from "./auth.ts";
@@ -10,7 +11,7 @@ export * from "./server.ts";
 const cmd = process.argv[2] ?? "serve";
 
 if (import.meta.main) {
-  if (cmd === "serve" || cmd === "start" || cmd === "preflight") {
+  if (cmd === "serve" || cmd === "start" || cmd === "preflight" || cmd === "doctor") {
     let env = process.env;
     if (process.env.GEMINI_GATEWAY_CONFIG) {
       try {
@@ -22,7 +23,16 @@ if (import.meta.main) {
         process.exit(1);
       }
     }
-    if (cmd === "preflight") {
+    if (cmd === "doctor") {
+      try {
+        const adapter = resolveAdapter(env);
+        console.log(`Google adapter: ${adapter}`);
+        if (adapter === "agy-cli") {
+          const models = await agyCatalog(env, AbortSignal.timeout(Number(env.GEMINI_GATEWAY_TIMEOUT_MS || 120000)));
+          console.log(`Native interface/catalog available (${models.length} models); authentication is owned by AGY and requires preflight.`);
+        } else console.log(`Auth configured: ${resolveGoogleCredentials(env).kind} (not an entitlement check)`);
+      } catch { console.error("Selected Google adapter is unavailable; check its CLI or supported API credentials."); process.exitCode = 1; }
+    } else if (cmd === "preflight") {
       try { console.log(JSON.stringify(await preflight(env, AbortSignal.timeout(Number(env.GEMINI_GATEWAY_TIMEOUT_MS || 120000))))); }
       catch { console.error("Google adapter preflight failed. Check the selected native CLI or API credentials/model; provider remains unchanged."); process.exitCode = 1; }
     } else {
@@ -31,17 +41,6 @@ if (import.meta.main) {
     console.log(`[claude-gemini-gateway] listening on http://${host}:${server.port}`);
     for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => { server.stop(true); process.exit(0); });
     }
-  } else if (cmd === "doctor") {
-    console.log("[claude-gemini-gateway] environment doctor:");
-    try {
-      const creds = resolveGoogleCredentials();
-      console.log(`  Auth configured: ${creds.kind} (not an entitlement check)`);
-    } catch (e: any) {
-      console.log(`  Auth unavailable: ${e.message}`);
-      process.exitCode = 1;
-    }
-    const hasConsumer = detectConsumerOAuth();
-    console.log(`  Consumer OAuth detected: ${hasConsumer ? "yes (native agy recommended)" : "no"}`);
   } else if (cmd === "version") {
     console.log(`claude-gemini-gateway v${version}`);
   } else {
