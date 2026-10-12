@@ -76,7 +76,7 @@ test("external tools, one result continuation, and fresh text have strict owners
 test("explicit native request models are honored; only frontend aliases delegate to native defaults", () => {
   expect(resolveAgyModel("catalog-selected-model", {})).toBe("catalog-selected-model");
   expect(resolveAgyModel("agy", {})).toBeUndefined();
-  expect(resolveAgyModel("claude-frontend-alias", {})).toBeUndefined();
+  expect(resolveAgyModel("claude-runtime-model", {})).toBe("claude-runtime-model");
   expect(resolveAgyModel("catalog-selected-model", { AGY_GATEWAY_MODEL: "configured-model" })).toBe("configured-model");
   expect(() => resolveAgyModel("<placeholder>", {})).toThrow();
 });
@@ -86,10 +86,10 @@ test("the HTTP adapter forwards a catalog model selected in the request when no 
   delete nativeEnv.AGY_GATEWAY_MODEL;
   const server = createGatewayServer({ port: 0, env: nativeEnv });
   try {
-    const response = await fetch(`${server.url}v1/messages`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "catalog-choice", messages: [{ role: "user", content: "NEW_MODEL_TURN" }] }) });
+    const response = await fetch(`${server.url}v1/messages`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-catalog-choice", messages: [{ role: "user", content: "NEW_MODEL_TURN" }] }) });
     const body: any = await response.json();
     expect(response.status).toBe(200);
-    expect(body.model).toBe("catalog-choice");
+    expect(body.model).toBe("claude-catalog-choice");
     expect(body.content[0].text).toBe("NEW_MODEL_TURN");
   } finally { server.stop(true); }
 });

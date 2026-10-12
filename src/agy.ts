@@ -131,7 +131,8 @@ export function agyPrompt(request: AnthropicMessagesRequest, current: { text: st
 }
 
 export function resolveAgyModel(requestModel: string, env: Environment): string | undefined {
-  const selected = env.AGY_GATEWAY_MODEL || (requestModel === "agy" || requestModel.startsWith("claude-") ? undefined : requestModel);
+  if (typeof requestModel !== "string" || !requestModel) throw new Error("A request model is required.");
+  const selected = env.AGY_GATEWAY_MODEL || (requestModel === "agy" ? undefined : requestModel);
   if (selected && !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(selected)) throw new Error("Invalid native model selection.");
   return selected;
 }
