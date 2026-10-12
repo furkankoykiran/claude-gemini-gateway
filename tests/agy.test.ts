@@ -97,3 +97,17 @@ test("fragmented native UTF-8 preserves multilingual text", async () => {
   const result = await agyInference(env("unicode"), "fixture-model", { current_user_text: "current" }, AbortSignal.timeout(2000));
   expect(result.output.text).toBe("Güncel Türkçe ☕");
 });
+
+test("doctor reads native adapter configuration without requiring or claiming API credentials", async () => {
+  const config = join(root, "doctor.json");
+  await writeFile(config, JSON.stringify({ env: { GEMINI_GATEWAY_ADAPTER: "agy-cli", AGY_GATEWAY_BIN: binary } }));
+  const environment: Record<string, string | undefined> = { ...process.env, GEMINI_GATEWAY_CONFIG: config, FIXTURE_MODE: "unauthenticated" };
+  delete environment.GEMINI_GATEWAY_ADAPTER;
+  delete environment.GEMINI_API_KEY;
+  const child = Bun.spawn([process.execPath, "run", join(import.meta.dir, "../src/index.ts"), "doctor"], { env: environment, stdout: "pipe", stderr: "pipe" });
+  const output = await new Response(child.stdout).text();
+  expect(await child.exited).toBe(0);
+  expect(output).toContain("Google adapter: agy-cli");
+  expect(output).toContain("authentication is owned by AGY and requires preflight");
+  expect(output).not.toContain("Auth configured: api-key");
+});
