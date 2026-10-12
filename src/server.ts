@@ -1,4 +1,4 @@
-import { agyCatalog, agyInference, agyPrompt } from "./agy.ts";
+import { agyCatalog, agyInference, agyPrompt, resolveAgyModel } from "./agy.ts";
 import { version } from "../package.json";
 import { resolveGoogleCredentials } from "./auth.ts";
 import { resolveGeminiModel, translateAnthropicToGemini, translateGeminiToAnthropic } from "./translate.ts";
@@ -109,8 +109,8 @@ export function createGatewayServer(options: ServerOptions = {}) {
           if (url.pathname === "/v1/models") return Response.json({ data: (await agyCatalog(env, controller.signal)).map((id) => ({ id, object: "model", owned_by: "antigravity" })) });
           const body: AnthropicMessagesRequest = await req.json();
           let current;
-          const selected = env.AGY_GATEWAY_MODEL || undefined;
-          try { current = currentTurn(body); cycles.claim(body, req.headers.get("x-claude-code-session-id"), selected || "native-default"); }
+          let selected: string | undefined;
+          try { selected = resolveAgyModel(body.model, env); current = currentTurn(body); cycles.claim(body, req.headers.get("x-claude-code-session-id"), selected || body.model); }
           catch (error) { return failure((error as Error).message, 400); }
           const result = await agyInference(env, selected, agyPrompt(body, current), controller.signal);
           if (controller.signal.aborted) throw new Error("cancelled");
@@ -119,7 +119,7 @@ export function createGatewayServer(options: ServerOptions = {}) {
             if (!tool || !call.input || typeof call.input !== "object" || Array.isArray(call.input) || tool.input_schema.required?.some((key) => !(key in call.input))) throw new Error("Invalid external tool proposal.");
             return { type: "tool_use", id: `call_${crypto.randomUUID()}`, name: call.name, input: call.input };
           });
-          cycles.issue(calls, calls, req.headers.get("x-claude-code-session-id"), selected || "native-default");
+          cycles.issue(calls, calls, req.headers.get("x-claude-code-session-id"), selected || body.model);
           const message = { id: `msg_${crypto.randomUUID()}`, type: "message", role: "assistant", model: result.model, content: [...(result.output.text ? [{ type: "text", text: result.output.text }] : []), ...calls], stop_reason: calls.length ? "tool_use" : "end_turn", stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } };
           return body.stream ? new Response(anthropicSse(message), { headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache" } }) : Response.json(message);
         }

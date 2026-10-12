@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { agyInference, agyCatalog } from "../src/agy.ts";
+import { agyInference, agyCatalog, resolveAgyModel } from "../src/agy.ts";
 import { preflight, createGatewayServer } from "../src/server.ts";
 
 const root = await mkdtemp(join(tmpdir(), "agy-fixture-"));
@@ -15,7 +15,8 @@ if(process.argv.includes('--help')) {console.error('--agent --input-format --out
 if(process.argv.includes('models')){console.log('fixture-model Fixture model');process.exit(0)}
 if(mode==='unauthenticated')process.exit(1);
 const conversation=crypto.randomUUID();
-console.log(JSON.stringify({event:'init',conversation_id:conversation,init:{model:'fixture-model'}}));
+const modelIndex=process.argv.indexOf('--model');const selectedModel=modelIndex<0?'fixture-model':process.argv[modelIndex+1];
+console.log(JSON.stringify({event:'init',conversation_id:conversation,init:{model:selectedModel}}));
 for await (const line of console){
  const req=JSON.parse(line);const hooks=JSON.parse(await readFile('.agents/hooks.json','utf8'));
  const command=hooks['gateway-native-deny'].PreInvocation[0].command;
@@ -28,7 +29,8 @@ for await (const line of console){
  let text=prompt.current_user_text||'RESULT_SEEN';
  const nonce=text.match(/exactly ([a-f0-9-]+) and/);if(nonce)text=nonce[1];
  const tool_calls=text==='REQUEST_TOOL'?[{name:'fixture_external',input:{value:'nested'}}]:[];
- console.log(JSON.stringify({event:'result',result:{conversation_id:mode==='stale'?'other':conversation,status:'SUCCESS',num_turns:1,structured_output:{text:tool_calls.length?'':text,tool_calls}}}));
+ const row=JSON.stringify({event:'result',result:{conversation_id:mode==='stale'?'other':conversation,status:'SUCCESS',num_turns:1,structured_output:{text:mode==='unicode'?'Güncel Türkçe ☕':tool_calls.length?'':text,tool_calls}}});
+ if(mode==='unicode'){const bytes=Buffer.from(row+'\\n');const split=bytes.indexOf(Buffer.from('ü'))+1;process.stdout.write(bytes.subarray(0,split));await new Promise(r=>setTimeout(r,10));process.stdout.write(bytes.subarray(split));}else console.log(row);
  if(mode==='late'){await new Promise(r=>setTimeout(r,10));console.log(JSON.stringify({event:'result',result:{}}));}
  process.exit(0);
 }
@@ -68,4 +70,30 @@ test("external tools, one result continuation, and fresh text have strict owners
     messages.push({ role: "user", content: "FRESH_TURN" });
     expect((await (await post(messages)).json()).content[0].text).toBe("FRESH_TURN");
   } finally { server.stop(true); }
+});
+
+test("explicit native request models are honored; only frontend aliases delegate to native defaults", () => {
+  expect(resolveAgyModel("catalog-selected-model", {})).toBe("catalog-selected-model");
+  expect(resolveAgyModel("agy", {})).toBeUndefined();
+  expect(resolveAgyModel("claude-frontend-alias", {})).toBeUndefined();
+  expect(resolveAgyModel("catalog-selected-model", { AGY_GATEWAY_MODEL: "configured-model" })).toBe("configured-model");
+  expect(() => resolveAgyModel("<placeholder>", {})).toThrow();
+});
+
+test("the HTTP adapter forwards a catalog model selected in the request when no model override is configured", async () => {
+  const nativeEnv: Record<string, string | undefined> = env();
+  delete nativeEnv.AGY_GATEWAY_MODEL;
+  const server = createGatewayServer({ port: 0, env: nativeEnv });
+  try {
+    const response = await fetch(`${server.url}v1/messages`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "catalog-choice", messages: [{ role: "user", content: "NEW_MODEL_TURN" }] }) });
+    const body: any = await response.json();
+    expect(response.status).toBe(200);
+    expect(body.model).toBe("catalog-choice");
+    expect(body.content[0].text).toBe("NEW_MODEL_TURN");
+  } finally { server.stop(true); }
+});
+
+test("fragmented native UTF-8 preserves multilingual text", async () => {
+  const result = await agyInference(env("unicode"), "fixture-model", { current_user_text: "current" }, AbortSignal.timeout(2000));
+  expect(result.output.text).toBe("Güncel Türkçe ☕");
 });
